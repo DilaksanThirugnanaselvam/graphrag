@@ -1,0 +1,5 @@
+aiohttp
+networkx
+sentence-transformers
+pyyaml
+pytest
