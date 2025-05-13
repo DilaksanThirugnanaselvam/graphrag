@@ -1,0 +1,11 @@
+paths:
+  input_dir: "data/input"
+  output_dir: "data/output"
+
+llm:
+  api_key: ${API_KEY}
+  endpoint: "https://api.groq.com/openai/v1/chat/completions"
+
+chunking:
+  chunk_size: 300
+  overlap: 50
