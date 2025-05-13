@@ -8,3 +8,36 @@ A from-scratch implementation of GraphRAG based on the research paper (https://a
    ```bash
    pip install -r requirements.txt
    ```
+
+2. Configure `configs/settings.yaml` with your LLM API key and endpoint.
+
+3. Place input text in `data/input/sample.txt` (a sample is included).
+
+## Usage
+
+Run indexing:
+```bash
+python scripts/run_indexing.py
+```
+
+Run queries:
+```bash
+python scripts/run_query.py
+```
+
+Run tests:
+```bash
+pytest tests/
+```
+
+## Project Structure
+
+- `src/`: Core implementation (text processing, entity extraction, graph building, querying).
+- `scripts/`: Entry points for indexing and querying.
+- `configs/`: Configuration files.
+- `data/`: Input and output directories.
+- `tests/`: Unit tests.
+
+## License
+
+MIT
