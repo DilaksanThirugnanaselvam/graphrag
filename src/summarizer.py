@@ -1,14 +1,14 @@
 from typing import List
 
-import networkx as nx  # <-- Add this line
+import networkx as nx
 
 from llm_client import LLMClient
 
 
 class Summarizer:
-    """Generates summaries for graph communities."""
+    """Generates summaries for communities in the graph using an LLM."""
 
-    def __init__(self, llm_client: LLMClient):
+    def __init__(self, llm_client: LLMClient) -> None:
         """
         Initialize Summarizer.
 
@@ -19,20 +19,26 @@ class Summarizer:
 
     async def summarize_community(self, community: List[str], graph: nx.Graph) -> str:
         """
-        Generate a summary for a community.
+        Summarize a community using the LLM.
 
         Args:
             community (List[str]): List of entity names in the community.
             graph (nx.Graph): Knowledge graph.
 
         Returns:
-            str: Community summary.
+            str: Summary of the community.
         """
-        entities = ", ".join(community)
+        relationships = []
+        for u, v, data in graph.edges(data=True):
+            if u in community and v in community:
+                relationships.append((u, v, data.get("relationship", "related to")))
+
         prompt = f"""
-        Summarize the relationships and entities in the following community.
-        Entities: {entities}
-        Provide a concise summary of their interactions.
+        Summarize the following community of entities and their relationships:
+        Entities: {community}
+        Relationships: {relationships}
+        Provide a concise summary.
         """
-        response = await self.llm_client.call_llm(prompt)
-        return f"Summary: {entities} are interconnected through various relationships."
+        mock_response = f"Summary: {', '.join(community)} are interconnected through various relationships."
+        response = await self.llm_client.call_llm(prompt, mock_response=mock_response)
+        return response
