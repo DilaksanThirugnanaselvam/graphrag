@@ -3,7 +3,7 @@ paths:
   output_dir: "data/output"
 
 llm:
-  api_key: ${API_KEY}
+  api_key: ${LLMs_API_KEY}
   endpoint: "https://api.groq.com/openai/v1/chat/completions"
 
 chunking:
