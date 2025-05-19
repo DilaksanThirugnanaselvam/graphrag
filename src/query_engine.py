@@ -1,111 +1,86 @@
 import logging
-from typing import Dict
+import os
+import sys
 
-import networkx as nx
-import numpy as np
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from graphrag_extender.db import Database
+from llm_client import LLMClient
 from sentence_transformers import SentenceTransformer
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 
 class QueryEngine:
-    """Handles global and local queries on the knowledge graph using embeddings and LLM."""
-
-    def __init__(self, llm_client, graph: nx.Graph, summaries: Dict[int, str]) -> None:
-        """
-        Initialize QueryEngine.
-
-        Args:
-            llm_client: LLM client for generating answers.
-            graph (nx.Graph): Knowledge graph.
-            summaries (Dict[int, str]): Community summaries.
-        """
+    def __init__(
+        self, db: Database, llm_client: LLMClient, embedder: SentenceTransformer
+    ):
+        self.db = db
         self.llm_client = llm_client
-        self.graph = graph
-        self.summaries = summaries
-        self.model = SentenceTransformer("all-MiniLM-L6-v2")
+        self.embedder = embedder
 
-        # Generate embeddings for summaries
-        self.summary_texts = (
-            [text for _, text in sorted(self.summaries.items())]
-            if self.summaries
-            else []
-        )
-        self.summary_embeddings = (
-            self.model.encode(self.summary_texts)
-            if self.summary_texts
-            else np.array([])
-        )
+    async def global_query(self, question: str) -> str:
+        """Answer a global question using community summaries."""
+        try:
+            question_embedding = self.embedder.encode(question).tolist()
+            with self.db.get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT id, summary
+                        FROM communities
+                        ORDER BY summary_embedding <-> %s
+                        LIMIT 3
+                        """,
+                        (question_embedding,),
+                    )
+                    communities = cur.fetchall()
 
-    async def global_query(self, query: str) -> str:
-        """
-        Answer a global query using community summaries and embeddings.
+            if not communities:
+                return "No relevant communities found."
 
-        Args:
-            query (str): The query string.
+            context = "\n".join(c["summary"] for c in communities)
+            prompt = f"Based on these summaries:\n{context}\nAnswer: {question}"
+            response = await self.llm_client.generate(prompt)
+            return response.strip()
 
-        Returns:
-            str: Answer to the query.
-        """
-        logger.info("Running global query")
-        if not self.summary_texts:
-            return "No summaries available to answer the query."
+        except Exception as e:
+            logger.error(f"Global query failed: {str(e)}")
+            return "Error processing global query."
 
-        # Encode the query
-        query_embedding = self.model.encode(query)
+    async def local_query(self, question: str, entity: str) -> str:
+        """Answer a local question about a specific entity."""
+        try:
+            with self.db.get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id FROM nodes WHERE name = %s", (entity,))
+                    result = cur.fetchone()
+                    if not result:
+                        return f"Entity {entity} not found."
+                    entity_id = result["id"]
 
-        # Compute similarity with summaries
-        similarities = np.dot(self.summary_embeddings, query_embedding) / (
-            np.linalg.norm(self.summary_embeddings, axis=1)
-            * np.linalg.norm(query_embedding)
-        )
+                    cur.execute(
+                        """
+                        SELECT n1.name AS source, n2.name AS target, e.relationship, e.weight
+                        FROM edges e
+                        JOIN nodes n1 ON e.source_id = n1.id
+                        JOIN nodes n2 ON e.target_id = n2.id
+                        WHERE e.source_id = %s OR e.target_id = %s
+                        """,
+                        (entity_id, entity_id),
+                    )
+                    relationships = cur.fetchall()
 
-        # Find the most relevant summary
-        most_relevant_idx = int(np.argmax(similarities))
-        most_relevant_summary = self.summary_texts[most_relevant_idx]
+            if not relationships:
+                return f"No relationships found for {entity}."
 
-        # Use LLM to generate a refined answer
-        prompt = f"""
-        Based on the following summary, answer the query.
-        Summary: {most_relevant_summary}
-        Query: {query}
-        """
-        mock_response = f"Answer to '{query}': {most_relevant_summary}"
-        response = await self.llm_client.call_llm(prompt, mock_response=mock_response)
-        return response
+            context = "\n".join(
+                f"{r['source']} is {r['relationship']} to {r['target']} (weight: {r['weight']})"
+                for r in relationships
+            )
+            prompt = f"Based on these relationships:\n{context}\nAnswer: {question}"
+            response = await self.llm_client.generate(prompt)
+            return response.strip()
 
-    async def local_query(self, query: str, entity: str) -> str:
-        """
-        Answer a local query focused on a specific entity.
-
-        Args:
-            query (str): The query string.
-            entity (str): The target entity.
-
-        Returns:
-            str: Answer to the query.
-        """
-        logger.info("Running local query")
-        if entity not in self.graph.nodes:
-            return f"Entity '{entity}' not found in the graph."
-
-        # Extract relationships involving the entity
-        relationships = [
-            (entity, neighbor, data.get("relationship", "related to"))
-            for neighbor, data in self.graph[entity].items()
-        ]
-
-        # Use LLM to generate an answer
-        prompt = f"""
-        Based on the following entity and its relationships, answer the query.
-        Entity: {entity}
-        Relationships: {relationships}
-        Query: {query}
-        """
-        mock_response = f"Answer to '{query}' about {entity}: Entity: {entity}, Relationships: {relationships}"
-        response = await self.llm_client.call_llm(prompt, mock_response=mock_response)
-        return response
+        except Exception as e:
+            logger.error(f"Local query failed: {str(e)}")
+            return "Error processing local query."
