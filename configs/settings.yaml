@@ -3,9 +3,12 @@ paths:
   output_dir: "data/output"
 
 llm:
-  api_key: ${LLMs_API_KEY}
+  api_key: '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'
   endpoint: "https://api.groq.com/openai/v1/chat/completions"
 
 chunking:
   chunk_size: 300
   overlap: 50
+
+db:
+  conn_string: "postgresql://postgres@localhost:5433/graphrag"
