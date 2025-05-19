@@ -34,6 +34,7 @@ pytest tests/
 
 - `src/`: Core implementation (text processing, entity extraction, graph building, querying).
 - `scripts/`: Entry points for indexing and querying.
+- `graphrag_extender\`: Incremental graph extender package with PostgreSQL/       pgvector.
 - `configs/`: Configuration files.
 - `data/`: Input and output directories.
 - `tests/`: Unit tests.
