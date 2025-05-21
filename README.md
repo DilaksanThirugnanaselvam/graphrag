@@ -1,44 +1,22 @@
 # GraphRAG Project
 
-A from-scratch implementation of GraphRAG based on the research paper (https://arxiv.org/pdf/2404.16130).
+A from-scratch implementation of GraphRAG based on the research paper [GraphRAG: Knowledge Graphs for AI Applications](https://arxiv.org/pdf/2404.16130). This project supports incremental indexing, vector-based querying with `pgvector`, and community detection using the Leiden algorithm.
+
+## Features
+- Incremental indexing of text documents using a `documents` table.
+- Entity extraction and graph construction with `networkx`.
+- Community detection with `leidenalg` and `igraph`.
+- Vector similarity searches using `pgvector` (384-dimensional embeddings).
+- Global and local queries powered by `sentence-transformers` and an LLM.
+
+## Prerequisites
+- Docker Desktop (for Windows: ensure WSL2 is enabled).
+- Python 3.12+ (optional for local setup).
+- PostgreSQL with `pgvector` (handled via Docker).
 
 ## Setup
 
-1. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. Configure `configs/settings.yaml` with your LLM API key and endpoint.
-
-3. Place input text in `data/input/sample.txt` (a sample is included).
-
-## Usage
-
-Run indexing:
-```bash
-python scripts/run_indexing.py
-```
-
-Run queries:
-```bash
-python scripts/run_query.py
-```
-
-Run tests:
-```bash
-pytest tests/
-```
-
-## Project Structure
-
-- `src/`: Core implementation (text processing, entity extraction, graph building, querying).
-- `scripts/`: Entry points for indexing and querying.
-- `graphrag_extender/`: Incremental graph extender package with PostgreSQL/       pgvector.
-- `configs/`: Configuration files.
-- `data/`: Input and output directories.
-- `tests/`: Unit tests.
-
-## License
-
-MIT
+1. **Clone the Repository**:
+   ```powershell
+   git clone <repository-url>
+   cd graphrag_project/graphrag
