@@ -34,18 +34,16 @@ class QueryEngine:
             question_embedding = self.embedder.encode(question).tolist()
 
             # Find relevant communities
-            with self.db.get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT id, summary
-                        FROM communities
-                        ORDER BY summary_embedding <-> %s
-                        LIMIT 3
-                        """,
-                        (question_embedding,),
-                    )
-                    communities = cur.fetchall()
+            async with self.db.pool.acquire() as conn:
+                communities = await conn.fetch(
+                    """
+                    SELECT id, summary
+                    FROM communities
+                    ORDER BY summary_embedding <-> $1
+                    LIMIT 3
+                    """,
+                    question_embedding,
+                )
 
             if not communities:
                 return "No relevant communities found."
@@ -63,27 +61,26 @@ class QueryEngine:
     async def local_query(self, question: str, entity: str) -> str:
         """Answer a local question about a specific entity."""
         try:
-            # Find entity
-            with self.db.get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT id FROM nodes WHERE name = %s", (entity,))
-                    result = cur.fetchone()
-                    if not result:
-                        return f"Entity {entity} not found."
-                    entity_id = result["id"]
+            async with self.db.pool.acquire() as conn:
+                # Find entity
+                result = await conn.fetchrow(
+                    "SELECT id FROM nodes WHERE name = $1", entity
+                )
+                if not result:
+                    return f"Entity {entity} not found."
+                entity_id = result["id"]
 
-                    # Get relationships
-                    cur.execute(
-                        """
-                        SELECT n1.name AS source, n2.name AS target, e.relationship, e.weight
-                        FROM edges e
-                        JOIN nodes n1 ON e.source_id = n1.id
-                        JOIN nodes n2 ON e.target_id = n2.id
-                        WHERE e.source_id = %s OR e.target_id = %s
-                        """,
-                        (entity_id, entity_id),
-                    )
-                    relationships = cur.fetchall()
+                # Get relationships
+                relationships = await conn.fetch(
+                    """
+                    SELECT n1.name AS source, n2.name AS target, e.relationship, e.weight
+                    FROM edges e
+                    JOIN nodes n1/history/log.txt ON e.source_id = n1.id
+                    JOIN nodes n2 ON e.target_id = n2.id
+                    WHERE e.source_id = $1 OR e.target_id = $1
+                    """,
+                    entity_id,
+                )
 
             if not relationships:
                 return f"No relationships found for {entity}."
@@ -106,8 +103,9 @@ async def main():
     """Main function to run the GraphRAG query pipeline."""
     try:
         # Load configuration
-        config = load_config("configs/settings.yaml")
+        config = load_config("../configs/settings.yaml")
         db = Database(config["db"]["conn_string"])
+        await db.initialize()
         llm_client = LLMClient(
             api_key=config["llm"]["api_key"],
             endpoint=config["llm"]["endpoint"],
@@ -130,6 +128,8 @@ async def main():
     except Exception as e:
         logger.error(f"Query pipeline failed: {str(e)}")
         raise
+    finally:
+        await db.close()
 
 
 if __name__ == "__main__":
