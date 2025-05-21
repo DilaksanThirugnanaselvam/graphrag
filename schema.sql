@@ -1,16 +1,23 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
+CREATE TABLE documents (
+    id SERIAL PRIMARY KEY,
+    path TEXT UNIQUE NOT NULL,
+    processed BOOLEAN DEFAULT FALSE,
+    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE nodes (
     id SERIAL PRIMARY KEY,
-    name VARCHAR(255) UNIQUE NOT NULL,
-    type VARCHAR(50)
+    name TEXT UNIQUE NOT NULL,
+    type TEXT NOT NULL
 );
 
 CREATE TABLE edges (
     id SERIAL PRIMARY KEY,
     source_id INTEGER REFERENCES nodes(id),
     target_id INTEGER REFERENCES nodes(id),
-    relationship VARCHAR(255) NOT NULL,
+    relationship TEXT NOT NULL,
     weight FLOAT NOT NULL,
     UNIQUE (source_id, target_id, relationship)
 );
@@ -18,6 +25,7 @@ CREATE TABLE edges (
 CREATE TABLE chunks (
     id SERIAL PRIMARY KEY,
     text TEXT NOT NULL,
+    document_id INTEGER REFERENCES documents(id),
     embedding VECTOR(384)
 );
 
