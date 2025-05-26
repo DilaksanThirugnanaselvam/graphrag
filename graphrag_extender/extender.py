@@ -1,154 +1,168 @@
-import asyncio
 import logging
-import networkx as nx
 import os
 import sys
+
+import networkx as nx
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.text_processor import TextProcessor
 from src.entity_extractor import EntityExtractor
-from src.llm_client import LLMClient
-from src.summarizer import Summarizer
-from graphrag_extender.db import Database
-from graphrag_extender.embeddings import Embedder
-from collections import defaultdict
+from src.text_chunker import TextChunker
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+from graphrag_extender.db import Database
+from graphrag_extender.embeddings import Embeddings
+
 logger = logging.getLogger(__name__)
+
 
 class GraphExtender:
     def __init__(self, config: dict):
+        self.config = config
         self.db = Database(config["db"]["conn_string"])
-        self.llm_client = LLMClient(
-            api_key=config["llm"]["api_key"],
-            endpoint=config["llm"]["endpoint"],
-            model_id="llama3-70b-8192",
-        )
-        self.processor = TextProcessor(
-            chunk_size=config["chunking"]["chunk_size"],
-            overlap=config["chunking"]["overlap"],
-        )
-        self.extractor = EntityExtractor(self.llm_client)
-        self.summarizer = Summarizer(self.llm_client)
-        self.embedder = Embedder()
+        self.chunker = TextChunker(config)
+        self.extractor = EntityExtractor(config)
+        self.embeddings = Embeddings(config)
+        self.chunk_size = config.get("chunk_size", 512)
 
-    async def extend_graph(self, input_dir: str) -> None:
+    async def initialize(self):
+        await self.db.initialize()
+        logger.info("GraphExtender initialized")
+
+    async def extend_graph(self, input_dir: str):
+        logger.info("Starting to process documents")
+        for filename in os.listdir(input_dir):
+            file_path = os.path.join(input_dir, filename)
+            if os.path.isfile(file_path):
+                doc_id = await self.db.add_document(file_path)
+                logger.info(f"Added document to database: {file_path}")
+                await self.process_document(file_path, doc_id)
+                await self.db.mark_document_processed(doc_id)
+        await self.update_communities()
+
+    async def process_document(self, file_path: str, doc_id: int):
+        logger.info(f"Processing document: {file_path}")
         try:
-            await self.db.initialize()
-            if not os.path.exists(input_dir):
-                logger.error(f"Input directory not found: {input_dir}")
-                raise FileNotFoundError(f"Input directory not found: {input_dir}")
+            with open(file_path, "r", encoding="utf-8") as f:
+                text = f.read()
+            logger.debug(f"Document preview: {text[:100]}")
 
-            # Register new documents
-            for file_name in os.listdir(input_dir):
-                if file_name.endswith(".txt"):
-                    file_path = os.path.join(input_dir, file_name)
-                    await self.db.add_document(file_path)
-                    logger.info(f"Registered document: {file_path}")
+            chunks = self.chunker.chunk_text(text)
+            logger.info(f"Total chunks created: {len(chunks)}")
 
-            # Process unprocessed documents
-            documents = await self.db.get_unprocessed_documents()
-            if not documents:
-                logger.info("No unprocessed documents found")
+            for i, chunk in enumerate(chunks, 1):
+                logger.info(f"Processing chunk {i}/{len(chunks)} in {file_path}")
+                await self.process_chunk(chunk, doc_id)
+
+            await self.calculate_edge_weights(doc_id)
+        except Exception as e:
+            logger.error(f"Error processing document {file_path}: {str(e)}")
+            raise
+
+    async def process_chunk(self, chunk: str, doc_id: int):
+        logger.debug(f"Chunk text: {chunk[:100]}...")
+        try:
+            embedding = await self.embeddings.generate_embedding(chunk)
+            chunk_id = await self.db.add_chunk(chunk, embedding, doc_id)
+            entities = await self.extractor.extract_entities(chunk)
+            logger.debug(f"Extracted entities: {entities}")
+            for entity in entities:
+                entity_id = await self.db.add_node(entity["name"], entity["type"])
+                await self.db.link_chunk_entity(chunk_id, entity_id)
+        except Exception as e:
+            logger.error(f"Failed to process chunk: {str(e)}")
+            raise
+
+    async def calculate_edge_weights(self, doc_id: int):
+        logger.info(f"Calculating edge weights for document ID: {doc_id}")
+        try:
+            entities = await self.db.get_document_entities(doc_id)
+            logger.debug(f"Entities for doc {doc_id}: {entities}")
+            for i, (source_id, source_name) in enumerate(entities):
+                for target_id, target_name in entities[i + 1 :]:
+                    shared_chunks = await self.db.get_shared_chunks(
+                        source_id, target_id
+                    )
+                    if shared_chunks > 0:
+                        weight = shared_chunks / 2.0
+                        await self.db.add_edge(source_id, target_id, "related", weight)
+                        await self.db.add_edge(target_id, source_id, "related", weight)
+            logger.info(f"Edge weights calculated for document ID: {doc_id}")
+        except Exception as e:
+            logger.error(f"Error calculating edge weights: {str(e)}")
+            raise
+
+    async def update_communities(self):
+        logger.info("Updating communities")
+        try:
+            nodes, edges = await self.db.load_graph()
+            logger.debug(f"Loaded {len(nodes)} nodes and {len(edges)} edges")
+            if not nodes:
+                logger.info("No nodes found for community detection")
                 return
 
-            entity_to_id = {}
-            async with self.db.pool.acquire() as conn:
-                existing_nodes = await conn.fetch("SELECT id, name FROM nodes")
-                for node in existing_nodes:
-                    entity_to_id[node["name"]] = node["id"]
-
-            for document_id, document_path in documents:
-                logger.info(f"Processing document: {document_path}")
-                try:
-                    with open(document_path, "r", encoding="utf-8") as f:
-                        text = f.read().strip()
-                    if not text:
-                        logger.warning(f"Empty document: {document_path}")
-                        await self.db.mark_document_processed(document_id)
-                        continue
-
-                    chunks = self.processor.chunk_text(text)
-                    if not chunks:
-                        logger.warning(f"No chunks generated: {document_path}")
-                        await self.db.mark_document_processed(document_id)
-                        continue
-
-                    chunk_entity_pairs = []
-                    for i, chunk in enumerate(chunks):
-                        logger.info(f"Processing chunk {i + 1}/{len(chunks)} in {document_path}")
-                        try:
-                            entities = await self.extractor.extract_entities(chunk)
-                            chunk_id = await self.db.add_chunk(chunk, self.embedder.embed(chunk), document_id)
-                            chunk_entities = []
-                            for name, type_ in entities:
-                                if name not in entity_to_id:
-                                    entity_id = await self.db.add_node(name, type_)
-                                    entity_to_id[name] = entity_id
-                                await self.db.link_chunk_entity(chunk_id, entity_to_id[name])
-                                chunk_entities.append(name)
-                            chunk_entity_pairs.append((chunk_id, chunk_entities))
-                        except Exception as e:
-                            logger.error(f"Error processing chunk {i + 1}: {str(e)}")
-                            continue
-
-                    logger.info(f"Calculating edge weights for {document_path}")
-                    edge_weights = defaultdict(int)
-                    for _, entities in chunk_entity_pairs:
-                        for i, e1 in enumerate(entities):
-                            for e2 in entities[i + 1:]:
-                                if e1 != e2:
-                                    edge_weights[(e1, e2)] += 1
-                                    edge_weights[(e2, e1)] += 1
-
-                    for (e1, e2), weight in edge_weights.items():
-                        source_id = entity_to_id[e1]
-                        target_id = entity_to_id[e2]
-                        await self.db.add_edge(source_id, target_id, "connected", float(weight))
-
-                    await self.db.mark_document_processed(document_id)
-                    logger.info(f"Completed processing: {document_path}")
-
-            logger.info("Updating communities")
-            nodes, edges = await self.db.load_graph()
-            graph = nx.Graph()
+            G = nx.Graph()
+            node_map = {node["id"]: i for i, node in enumerate(nodes)}
             for node in nodes:
-                graph.add_node(node["name"], type=node["type"])
+                G.add_node(node_map[node["id"]], name=node["name"])
             for edge in edges:
-                graph.add_edge(
-                    next(n["name"] for n in nodes if n["id"] == edge["source_id"]),
-                    next(n["name"] for n in nodes if n["id"] == edge["target_id"]),
-                    relationship=edge["relationship"],
-                    weight=edge["weight"]
+                G.add_edge(
+                    node_map[edge["source_id"]],
+                    node_map[edge["target_id"]],
+                    weight=edge["weight"],
                 )
 
-            logger.info("Clustering communities using Leiden algorithm")
             communities = []
-            if graph.number_of_nodes() > 0:
-                try:
-                    from networkx.algorithms.community.leiden import leiden_communities
-                    communities = list(leiden_communities(graph, weight="weight", resolution=1.0, n_iterations=10))
-                except ImportError as e:
-                    logger.error(f"Leiden algorithm not available: {str(e)}")
-                    raise ImportError("Please install leidenalg and igraph: pip install leidenalg igraph")
-            logger.info(f"Found {len(communities)} communities")
+            if not edges:
+                logger.info("No edges found, creating single community")
+                communities = [[i for i in range(len(nodes))]]
+            else:
+                communities = list(
+                    nx.algorithms.community.greedy_modularity_communities(
+                        G, weight="weight"
+                    )
+                )
+                logger.debug(f"Detected {len(communities)} communities")
 
-            for i, community in enumerate(communities):
-                logger.info(f"Summarizing community {i + 1}/{len(communities)}")
-                try:
-                    community_nodes = list(community)
-                    summary = await self.summarizer.summarize_community(community_nodes, graph)
-                    summary_embedding = self.embedder.embed(summary)
-                    await self.db.add_community(i, community_nodes, summary, summary_embedding)
-                    logger.info(f"Saved community {i} summary")
-                except Exception as e:
-                    logger.error(f"Error summarizing community {i + 1}: {str(e)}")
-                    continue
+            if not communities:
+                logger.info("No communities detected, creating default community")
+                communities = [[i for i in range(len(nodes))]]
 
-            logger.info("Graph updated successfully")
+            async with self.db.pool.acquire() as conn:
+                max_id = await conn.fetchval(
+                    "SELECT COALESCE(MAX(id), -1) FROM communities"
+                )
+                start_id = max_id + 1
 
+                for idx, community in enumerate(communities, start=start_id):
+                    community_nodes = [nodes[node]["id"] for node in community]
+                    node_names = [nodes[node]["name"] for node in community]
+                    summary = f"Community {idx} with nodes: {', '.join(node_names)}"
+                    summary_embedding = await self.embeddings.generate_embedding(
+                        summary
+                    )
+
+                    # Check if community with same nodes exists
+                    existing_id = await conn.fetchval(
+                        "SELECT id FROM communities WHERE nodes = $1", community_nodes
+                    )
+                    if existing_id is not None:
+                        await conn.execute(
+                            "UPDATE communities SET summary = $1, summary_embedding = $2 WHERE id = $3",
+                            summary,
+                            summary_embedding,
+                            existing_id,
+                        )
+                        logger.debug(
+                            f"Updated community {existing_id} with {len(community_nodes)} nodes"
+                        )
+                    else:
+                        await self.db.add_community(
+                            idx, community_nodes, summary, summary_embedding
+                        )
+                        logger.debug(
+                            f"Added community {idx} with {len(community_nodes)} nodes"
+                        )
+            logger.info("Communities updated successfully")
         except Exception as e:
-            logger.error(f"Failed to extend graph: {str(e)}")
+            logger.error(f"Error updating communities: {str(e)}")
             raise
-        finally:
-            await self.db.close()

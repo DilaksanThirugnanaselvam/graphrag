@@ -1,9 +1,28 @@
-from sentence_transformers import SentenceTransformer
+import logging
+from typing import List
+
+from openai import AsyncOpenAI
+
+logger = logging.getLogger(__name__)
 
 
-class Embedder:
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
-        self.model = SentenceTransformer(model_name)
+class Embeddings:
+    def __init__(self, config: dict):
+        self.client = AsyncOpenAI(api_key=config["embeddings"]["api_key"])
+        self.model = config["embeddings"].get(
+            "embedding_model", "text-embedding-ada-002"
+        )
+        logger.info("Initialized Embeddings with OpenAI API")
 
-    def embed(self, text: str) -> list:
-        return self.model.encode(text).tolist()
+    async def generate_embedding(self, text: str) -> List[float]:
+        """Generate embedding for text."""
+        try:
+            response = await self.client.embeddings.create(
+                input=text, model=self.model, encoding_format="float"
+            )
+            embedding = response.data[0].embedding
+            logger.debug(f"Generated embedding for text: {text[:50]}...")
+            return embedding
+        except Exception as e:
+            logger.error(f"Embedding generation failed: {str(e)}")
+            raise
