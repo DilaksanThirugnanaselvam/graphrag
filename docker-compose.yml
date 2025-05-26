@@ -1,14 +1,4 @@
 services:
-  app:
-    build: .
-    depends_on:
-      - postgres
-    environment:
-      - DB_CONN_STRING=postgresql://postgres:admin@postgres:5432/graphrag
-    volumes:
-      - .:/app
-    command: ["python", "scripts/run_indexing.py"]
-
   postgres:
     image: ankane/pgvector:latest
     environment:
@@ -20,6 +10,33 @@ services:
       - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - graphrag-net
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./data/input:/app/data/input
+      - ./data/output:/app/data/output
+    environment:
+      - PYTHONUNBUFFERED=1
+      - POSTGRES_HOST=postgres
+    networks:
+      - graphrag-net
+
+networks:
+  graphrag-net:
+    driver: bridge
 
 volumes:
-  pgdata:
+  pgdata: {}
