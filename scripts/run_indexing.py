@@ -1,13 +1,15 @@
 import asyncio
 import logging
 import os
+import socket
 import sys
 import traceback
 
 import asyncpg
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -16,6 +18,7 @@ from graphrag_extender.extender import GraphExtender
 from src.utils import load_config
 
 
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 async def validate_schema(conn_string: str):
     """Validate that required database tables and pgvector extension exist."""
     pool = None
@@ -55,13 +58,57 @@ async def validate_schema(conn_string: str):
             await pool.close()
 
 
+async def clear_communities(conn_string: str):
+    """Clear the communities table to avoid duplicate key errors."""
+    pool = None
+    try:
+        pool = await asyncpg.create_pool(conn_string)
+        async with pool.acquire() as conn:
+            await conn.execute("TRUNCATE communities RESTART IDENTITY")
+            logger.info("Cleared communities table")
+    except Exception as e:
+        logger.error(f"Failed to clear communities table: {str(e)}")
+        raise
+    finally:
+        if pool:
+            await pool.close()
+
+
 async def main() -> None:
     try:
         logger.info("Loading configuration")
-        config = load_config("../configs/settings.yaml")
+        config = load_config("configs/settings.yaml")
+
+        host = os.getenv("POSTGRES_HOST", "postgres")
+        conn_string = config["db"]["conn_string"].replace("${POSTGRES_HOST}", host)
+
+        if not os.path.exists("/.dockerenv"):
+            conn_string = config["db"]["conn_string"].replace(
+                "${POSTGRES_HOST}", "localhost"
+            )
+            logger.info("Running locally, using localhost for PostgreSQL")
+        else:
+            try:
+                container_ip = socket.gethostbyname("postgres")
+                logger.info(
+                    f"Running in Docker, resolved postgres to IP: {container_ip}"
+                )
+                conn_string = config["db"]["conn_string"].replace(
+                    "${POSTGRES_HOST}", "postgres"
+                )
+            except socket.gaierror:
+                logger.warning("Failed to resolve 'postgres', using fallback IP")
+                container_ip = "172.19.0.2"
+                conn_string = config["db"]["conn_string"].replace(
+                    "${POSTGRES_HOST}", container_ip
+                )
+                logger.info(f"Using fallback IP: {container_ip}")
 
         logger.info("Validating database schema")
-        await validate_schema(config["db"]["conn_string"])
+        await validate_schema(conn_string)
+
+        logger.info("Clearing communities table")
+        await clear_communities(conn_string)
 
         input_dir = config["paths"]["input_dir"]
         if not os.path.exists(input_dir):
@@ -70,6 +117,7 @@ async def main() -> None:
         logger.info(f"Input directory: {input_dir}")
 
         extender = GraphExtender(config)
+        await extender.initialize()
         await extender.extend_graph(input_dir)
         logger.info("Graph update complete")
 
