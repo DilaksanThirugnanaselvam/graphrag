@@ -20,3 +20,15 @@ A from-scratch implementation of GraphRAG based on the research paper [GraphRAG:
    ```powershell
    git clone <repository-url>
    cd graphrag_project/graphrag
+
+
+2. **Reset Database:**:
+   ```powershell
+   docker-compose down --remove-orphans
+   docker volume rm graphrag_pgdata
+   docker-compose up --build -d --remove-orphans
+
+2. **Run Indexing and Querying:**:
+   ```powershell
+   docker-compose run --remove-orphans app python scripts/run_indexing.py
+   docker-compose run --remove-orphans app python scripts/run_query.py
