@@ -1,30 +1,16 @@
-import os
+import logging
 
 import yaml
 
-
-def load_config(config_path: str) -> dict:
-    """
-    Load configuration from YAML file.
-
-    Args:
-        config_path (str): Path to YAML file.
-
-    Returns:
-        dict: Configuration dictionary.
-    """
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
+logger = logging.getLogger(__name__)
 
 
-def save_to_file(content: str, path: str):
-    """
-    Save content to a file.
-
-    Args:
-        content (str): Content to save.
-        path (str): File path.
-    """
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        f.write(content)
+def load_config(file_path: str) -> dict:
+    """Load YAML configuration file."""
+    try:
+        with open(file_path, "r") as f:
+            config = yaml.safe_load(f)
+        return config
+    except Exception as e:
+        logger.error(f"Failed to load config {file_path}: {str(e)}")
+        raise

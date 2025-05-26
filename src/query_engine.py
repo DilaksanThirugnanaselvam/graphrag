@@ -4,16 +4,14 @@ import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from graphrag_extender.db import Database
+from graphrag_extender.embeddings import Embeddings
 from llm_client import LLMClient
-from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
 
 class QueryEngine:
-    def __init__(
-        self, db: Database, llm_client: LLMClient, embedder: SentenceTransformer
-    ):
+    def __init__(self, db: Database, llm_client: LLMClient, embedder: Embeddings):
         self.db = db
         self.llm_client = llm_client
         self.embedder = embedder
@@ -21,7 +19,7 @@ class QueryEngine:
     async def global_query(self, question: str) -> str:
         """Answer a global question using community summaries."""
         try:
-            question_embedding = self.embedder.encode(question).tolist()
+            question_embedding = await self.embedder.generate_embedding(question)
             with self.db.get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
