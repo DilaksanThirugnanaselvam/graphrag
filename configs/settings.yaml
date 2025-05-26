@@ -1,14 +1,19 @@
 paths:
   input_dir: "data/input"
-  output_dir: "data/output"
+  output_dir: "data/output" 
+ 
+embeddings:
+  api_key: ${openi_api_key}
+  model: "text-embedding-ada-002"
 
 llm:
-  api_key: ${LLM_API_KEY}
+  api_key: ${groq_api_key}
   endpoint: "https://api.groq.com/openai/v1/chat/completions"
+  model_id: llama3-70b-8192
 
 chunking:
   chunk_size: 512
   overlap: 50
 
 db:
-  conn_string: "postgresql://postgres:admin@localhost:5432/graphrag"
+  conn_string: postgresql://postgres:admin@172.19.0.2:5432/graphrag
